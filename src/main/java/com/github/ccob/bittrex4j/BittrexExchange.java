@@ -23,11 +23,8 @@ import com.github.ccob.bittrex4j.listeners.Listener;
 import com.github.ccob.bittrex4j.listeners.UpdateExchangeStateListener;
 import com.github.ccob.bittrex4j.listeners.UpdateSummaryStateListener;
 import com.github.signalr4j.client.ConnectionState;
-import com.github.signalr4j.client.Platform;
 import com.github.signalr4j.client.hubs.HubConnection;
 import com.github.signalr4j.client.hubs.HubProxy;
-import com.google.gson.Gson;
-import com.google.gson.internal.LinkedTreeMap;
 import org.apache.commons.codec.binary.Base64;
 import org.apache.http.HttpHeaders;
 import org.apache.http.client.HttpClient;
@@ -89,20 +86,18 @@ public class BittrexExchange implements AutoCloseable {
 
     private int retries;
 
-    private class ReconnectTimerTask extends TimerTask{
-        @Override
-        public void run() {
-            log.info("Attempting to reconnect to web socket");
-            startConnection();
-        }
+	private boolean autoConnect;
+
+	public BittrexExchange(String apikey, String secret) throws IOException {
+		this(5, apikey, secret, new HttpFactory());
     }
 
     public BittrexExchange() throws IOException {
         this(5);
     }
 
-    public BittrexExchange(String apikey, String secret) throws IOException {
-        this(5,apikey,secret,new HttpFactory());
+	public BittrexExchange(int retries, String apikey, String secret, HttpFactory httpFactory) throws IOException {
+		this(retries, true, apikey, secret, httpFactory);
     }
 
     public BittrexExchange(int retries) throws IOException {
@@ -113,11 +108,12 @@ public class BittrexExchange implements AutoCloseable {
         this(retries,apikey,secret,new HttpFactory());
     }
 
-    public BittrexExchange(int retries, String apikey, String secret, HttpFactory httpFactory) throws IOException {
+	public BittrexExchange(int retries, boolean autoConnect, String apikey, String secret, HttpFactory httpFactory) {
 
         this.apiKeySecret = new ApiKeySecret(apikey,secret);
         this.httpFactory = httpFactory;
         this.retries = retries;
+		this.autoConnect = autoConnect;
 
         mapper = new ObjectMapper();
         SimpleModule module = new SimpleModule();
@@ -132,6 +128,16 @@ public class BittrexExchange implements AutoCloseable {
         httpClient = httpFactory.createClient();
         httpClientContext = httpFactory.createClientContext();
     }
+
+	public BittrexExchange setAutoConnect(boolean autoConnect) {
+		this.autoConnect = autoConnect;
+		return this;
+	}
+
+	@Override
+	public void close() {
+		disconnectFromWebSocket();
+	}
 
     private boolean performCloudFlareAuthorization() throws IOException {
 
@@ -155,9 +161,9 @@ public class BittrexExchange implements AutoCloseable {
         hubConnection.getHeaders().put(HttpHeaders.USER_AGENT, Utils.getUserAgent());
     }
 
-    @Override
-    public void close() throws IOException {
-        disconnectFromWebSocket();
+	public void connectToWebSocket(Runnable connectedHandler) {
+		this.connectedHandler = connectedHandler;
+		startConnection();
     }
 
     public void onUpdateSummaryState(UpdateSummaryStateListener exchangeSummaryState){
@@ -301,10 +307,16 @@ public class BittrexExchange implements AutoCloseable {
         );
     }
 
-    public void connectToWebSocket(Runnable connectedHandler) throws IOException {
-        this.connectedHandler = connectedHandler;
-        startConnection();
-    }
+	private class ReconnectTimerTask extends TimerTask {
+		@Override
+		public void run() {
+			if (autoConnect) {
+				log.info("Attempting to reconnect to web socket");
+				startConnection();
+			}
+
+		}
+	}
 
     public Response<Tick[]> getTicks(String market, Interval tickInterval){
         return getResponse(new TypeReference<Response<Tick[]>>(){}, UrlBuilder.v2()
